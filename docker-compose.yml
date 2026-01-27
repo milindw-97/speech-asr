@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  voice-agent-asr:
+    build: .
+    image: voice-agent-asr:latest
+    container_name: voice-agent-asr
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist model cache to avoid re-downloading
+      - model-cache:/app/models
+    environment:
+      - MODEL_REPO=milind-plivo/parakeet-multilingual-base
+      - MODEL_FILENAME=parakeet-rnnt-1.1b-multilingual.nemo
+      - MODEL_CACHE_DIR=/app/models
+      # Uncomment if your HF repo is private
+      # - HF_TOKEN=your_huggingface_token
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  model-cache:
