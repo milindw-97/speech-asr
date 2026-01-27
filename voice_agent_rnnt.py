@@ -79,7 +79,9 @@ def filter_unwanted_languages(text: str, allowed_languages: List[str]) -> str:
         return text
     else:
         detected = detect_scripts(text)
-        print(f"[Language Filter] Blocked: '{text[:50]}...' (detected scripts: {detected})")
+        print(
+            f"[Language Filter] Blocked: '{text[:50]}...' (detected scripts: {detected})"
+        )
         return ""
 
 
@@ -87,9 +89,12 @@ def filter_unwanted_languages(text: str, allowed_languages: List[str]) -> str:
 @dataclass
 class DefaultConfig:
     """Default configuration values - can be overridden per session"""
+
     # Model
     model_repo: str = os.getenv("MODEL_REPO", "milind-plivo/parakeet-multilingual-base")
-    model_filename: str = os.getenv("MODEL_FILENAME", "parakeet-rnnt-1.1b-multilingual.nemo")
+    model_filename: str = os.getenv(
+        "MODEL_FILENAME", "parakeet-rnnt-1.1b-multilingual.nemo"
+    )
     model_cache_dir: str = os.getenv("MODEL_CACHE_DIR", "/app/models")
 
     sample_rate: int = 16000
@@ -145,6 +150,7 @@ def load_models():
         filename=defaults.model_filename,
         cache_dir=defaults.model_cache_dir,
         local_dir=defaults.model_cache_dir,
+        token=os.getenv("HF_TOKEN", None),
     )
     print(f"Model downloaded to: {model_path}")
 
@@ -190,6 +196,7 @@ def load_models():
 @dataclass
 class SessionConfig:
     """Per-session configuration"""
+
     session_id: str
     language: Optional[str] = None
     allowed_languages: Optional[List[str]] = None
@@ -251,12 +258,14 @@ def get_speech_probability(audio: np.ndarray) -> float:
         max_prob = 0.0
 
         for i in range(0, len(audio), VAD_CHUNK_SAMPLES):
-            chunk = audio[i: i + VAD_CHUNK_SAMPLES]
+            chunk = audio[i : i + VAD_CHUNK_SAMPLES]
 
             if len(chunk) < VAD_CHUNK_SAMPLES:
                 chunk = np.pad(chunk, (0, VAD_CHUNK_SAMPLES - len(chunk)))
 
-            audio_tensor = torch.tensor(chunk, dtype=torch.float32, device=defaults.device)
+            audio_tensor = torch.tensor(
+                chunk, dtype=torch.float32, device=defaults.device
+            )
             prob = vad_model(audio_tensor, defaults.sample_rate).item()
             max_prob = max(max_prob, prob)
 
@@ -319,19 +328,23 @@ class VoiceSession:
                 self.last_transcript = transcription["text"]
                 self.last_transcribe_time = current_time
 
-                result.update({
-                    "type": "partial",
-                    "text": transcription["text"],
-                    "confidence": transcription["confidence"],
-                    "latency_ms": transcription["latency_ms"],
-                    "audio_ms": round(buffer_ms, 1),
-                })
+                result.update(
+                    {
+                        "type": "partial",
+                        "text": transcription["text"],
+                        "confidence": transcription["confidence"],
+                        "latency_ms": transcription["latency_ms"],
+                        "audio_ms": round(buffer_ms, 1),
+                    }
+                )
             else:
-                result.update({
-                    "type": "speaking",
-                    "text": self.last_transcript,
-                    "audio_ms": round(buffer_ms, 1),
-                })
+                result.update(
+                    {
+                        "type": "speaking",
+                        "text": self.last_transcript,
+                        "audio_ms": round(buffer_ms, 1),
+                    }
+                )
 
         elif self.is_speaking:
             self.silence_ms += chunk_ms
@@ -341,22 +354,26 @@ class VoiceSession:
                 audio_array = np.array(self.audio_buffer, dtype=np.float32)
                 transcription = transcribe_audio(audio_array, self.config)
 
-                result.update({
-                    "type": "final",
-                    "text": transcription["text"],
-                    "is_final": True,
-                    "confidence": transcription["confidence"],
-                    "latency_ms": transcription["latency_ms"],
-                    "audio_ms": round(self.buffer_duration_ms(), 1),
-                })
+                result.update(
+                    {
+                        "type": "final",
+                        "text": transcription["text"],
+                        "is_final": True,
+                        "confidence": transcription["confidence"],
+                        "latency_ms": transcription["latency_ms"],
+                        "audio_ms": round(self.buffer_duration_ms(), 1),
+                    }
+                )
 
                 self.reset()
             else:
-                result.update({
-                    "type": "partial",
-                    "text": self.last_transcript,
-                    "silence_ms": round(self.silence_ms, 1),
-                })
+                result.update(
+                    {
+                        "type": "partial",
+                        "text": self.last_transcript,
+                        "silence_ms": round(self.silence_ms, 1),
+                    }
+                )
 
         return result
 
@@ -402,12 +419,27 @@ def parse_allowed_languages(value: Optional[str]) -> Optional[List[str]]:
 @app.websocket("/ws/transcribe")
 async def websocket_transcribe(
     websocket: WebSocket,
-    language: Optional[str] = Query(default=None, description="Force specific language"),
-    allowed_languages: Optional[str] = Query(default=None, description="Comma-separated allowed languages (e.g., 'en,hi')"),
-    min_utterance_ms: int = Query(default=250, ge=100, le=2000, description="Min audio before transcription"),
-    endpointing_silence_ms: int = Query(default=400, ge=100, le=2000, description="Silence to trigger endpoint"),
-    vad_threshold: float = Query(default=0.5, ge=0.1, le=0.9, description="VAD speech probability threshold"),
-    transcribe_throttle_ms: int = Query(default=150, ge=50, le=1000, description="Min time between partial transcriptions"),
+    language: Optional[str] = Query(
+        default=None, description="Force specific language"
+    ),
+    allowed_languages: Optional[str] = Query(
+        default=None, description="Comma-separated allowed languages (e.g., 'en,hi')"
+    ),
+    min_utterance_ms: int = Query(
+        default=250, ge=100, le=2000, description="Min audio before transcription"
+    ),
+    endpointing_silence_ms: int = Query(
+        default=400, ge=100, le=2000, description="Silence to trigger endpoint"
+    ),
+    vad_threshold: float = Query(
+        default=0.5, ge=0.1, le=0.9, description="VAD speech probability threshold"
+    ),
+    transcribe_throttle_ms: int = Query(
+        default=150,
+        ge=50,
+        le=1000,
+        description="Min time between partial transcriptions",
+    ),
 ):
     global session_counter
 
@@ -438,21 +470,23 @@ async def websocket_transcribe(
     print(f"[{session_id}] Connected (active sessions: {len(active_sessions)})")
 
     # Send ready message with session config
-    await websocket.send_json({
-        "type": "ready",
-        "session_id": session_id,
-        "config": {
-            "sample_rate": defaults.sample_rate,
-            "chunk_ms": defaults.chunk_ms,
-            "language": session_config.language,
-            "allowed_languages": session_config.get_allowed_languages(),
-            "min_utterance_ms": session_config.min_utterance_ms,
-            "endpointing_silence_ms": session_config.endpointing_silence_ms,
-            "vad_threshold": session_config.vad_threshold,
-            "transcribe_throttle_ms": session_config.transcribe_throttle_ms,
-            "streaming_support": has_streaming,
-        },
-    })
+    await websocket.send_json(
+        {
+            "type": "ready",
+            "session_id": session_id,
+            "config": {
+                "sample_rate": defaults.sample_rate,
+                "chunk_ms": defaults.chunk_ms,
+                "language": session_config.language,
+                "allowed_languages": session_config.get_allowed_languages(),
+                "min_utterance_ms": session_config.min_utterance_ms,
+                "endpointing_silence_ms": session_config.endpointing_silence_ms,
+                "vad_threshold": session_config.vad_threshold,
+                "transcribe_throttle_ms": session_config.transcribe_throttle_ms,
+                "streaming_support": has_streaming,
+            },
+        }
+    )
 
     try:
         while True:
@@ -468,6 +502,7 @@ async def websocket_transcribe(
     except Exception as e:
         print(f"[{session_id}] Error: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         active_sessions.discard(session_id)
