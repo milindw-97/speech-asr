@@ -1,7 +1,7 @@
 # Voice Agent ASR - Lightweight Dockerfile
 # Uses CUDA runtime image (~4GB vs ~20GB for full PyTorch image)
 
-FROM nvidia/cuda:12.4.0-cudnn-runtime-ubuntu22.04
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -15,8 +15,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
+    python3.12-venv \
     python3-pip \
-    python3.10-dev \
     libsndfile1 \
     ffmpeg \
     curl \
@@ -28,14 +28,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install PyTorch with CUDA 12.4 support (compatible with CUDA 13.0)
-RUN pip install --no-cache-dir \
-    torch==2.5.0 \
-    torchaudio==2.5.0 \
-    --index-url https://download.pytorch.org/whl/cu124
+# RUN pip3 install --no-cache-dir \
+#    torch==2.6.0 \
+#    torchaudio==2.6.0 \
+#    --index-url https://download.pytorch.org/whl/cu124
+
+RUN python3 -m venv env
 
 # Install other dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN env/bin/pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY voice_agent_rnnt.py .
@@ -57,4 +59,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the server
-CMD ["python", "voice_agent_rnnt.py"]
+CMD ["env/bin/python", "voice_agent_rnnt.py"]
