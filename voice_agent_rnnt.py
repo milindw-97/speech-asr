@@ -85,6 +85,33 @@ def filter_unwanted_languages(text: str, allowed_languages: List[str]) -> str:
         return ""
 
 
+# Pattern to match language tags like <en-US>, <hi-IN>, <es-ES>, etc.
+LANGUAGE_TAG_PATTERN = re.compile(r"<([a-z]{2}(?:-[A-Z]{2})?)>\s*$")
+
+
+def extract_language_tag(text: str) -> tuple[str, str | None]:
+    """
+    Extract and remove language tag from the end of transcript text.
+
+    Args:
+        text: Transcript text that may contain a language tag like <en-US> at the end
+
+    Returns:
+        Tuple of (cleaned_text, language_tag or None)
+        Example: ("Hello world", "en-US") or ("Hello world", None)
+    """
+    if not text:
+        return text, None
+
+    match = LANGUAGE_TAG_PATTERN.search(text)
+    if match:
+        language_tag = match.group(1)
+        cleaned_text = text[:match.start()].rstrip()
+        return cleaned_text, language_tag
+
+    return text, None
+
+
 # ============== Default Configuration ==============
 @dataclass
 class DefaultConfig:
@@ -234,6 +261,9 @@ def transcribe_audio(audio: np.ndarray, session_config: SessionConfig) -> dict:
     text = text.strip()
     filtered = False
 
+    # Extract language tag from transcript (e.g., <en-US>, <hi-IN>)
+    text, detected_language = extract_language_tag(text)
+
     allowed_langs = session_config.get_allowed_languages()
     if allowed_langs:
         original_text = text
@@ -246,6 +276,7 @@ def transcribe_audio(audio: np.ndarray, session_config: SessionConfig) -> dict:
         "latency_ms": round(elapsed_ms, 1),
         "audio_duration_ms": round(len(audio) / defaults.sample_rate * 1000, 1),
         "filtered": filtered,
+        "language": detected_language,
     }
 
 
@@ -283,6 +314,7 @@ class VoiceSession:
         self.is_speaking = False
         self.silence_ms = 0
         self.last_transcript = ""
+        self.last_language = None
         self.last_transcribe_time = 0
         self.utterance_id = 0
 
@@ -326,12 +358,14 @@ class VoiceSession:
                 transcription = transcribe_audio(audio_array, self.config)
 
                 self.last_transcript = transcription["text"]
+                self.last_language = transcription["language"]
                 self.last_transcribe_time = current_time
 
                 result.update(
                     {
                         "type": "partial",
                         "text": transcription["text"],
+                        "language": transcription["language"],
                         "confidence": transcription["confidence"],
                         "latency_ms": transcription["latency_ms"],
                         "audio_ms": round(buffer_ms, 1),
@@ -342,6 +376,7 @@ class VoiceSession:
                     {
                         "type": "speaking",
                         "text": self.last_transcript,
+                        "language": self.last_language,
                         "audio_ms": round(buffer_ms, 1),
                     }
                 )
@@ -358,6 +393,7 @@ class VoiceSession:
                     {
                         "type": "final",
                         "text": transcription["text"],
+                        "language": transcription["language"],
                         "is_final": True,
                         "confidence": transcription["confidence"],
                         "latency_ms": transcription["latency_ms"],
@@ -371,6 +407,7 @@ class VoiceSession:
                     {
                         "type": "partial",
                         "text": self.last_transcript,
+                        "language": self.last_language,
                         "silence_ms": round(self.silence_ms, 1),
                     }
                 )
@@ -384,6 +421,7 @@ class VoiceSession:
             result = {
                 "type": "final",
                 "text": transcription["text"],
+                "language": transcription["language"],
                 "is_final": True,
                 "forced": True,
             }
