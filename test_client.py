@@ -33,6 +33,7 @@ async def voice_client(
     min_utterance_ms: int = None,
     endpointing_silence_ms: int = None,
     vad_threshold: float = None,
+    lookback_ms: int = None,
 ):
     """Connect to voice agent and stream microphone audio"""
 
@@ -49,6 +50,7 @@ async def voice_client(
         min_utterance_ms=min_utterance_ms,
         endpointing_silence_ms=endpointing_silence_ms,
         vad_threshold=vad_threshold,
+        lookback_ms=lookback_ms,
     )
 
     print(f"Connecting to {url}...")
@@ -70,6 +72,7 @@ async def voice_client(
             print(f"  Allowed languages: {server_config.get('allowed_languages')}")
             print(f"  Endpointing: {server_config.get('endpointing_silence_ms')} ms")
             print(f"  VAD threshold: {server_config.get('vad_threshold')}")
+            print(f"  Lookback: {server_config.get('lookback_ms')} ms")
 
             sample_rate = server_config["sample_rate"]
             chunk_samples = int(sample_rate * server_config["chunk_ms"] / 1000)
@@ -222,7 +225,7 @@ Examples:
     parser.add_argument(
         "--server",
         "-s",
-        default="ws://localhost:8000/ws/transcribe",
+        default="ws://20.85.213.137:8080/ws/transcribe",
         help="WebSocket server URL",
     )
     parser.add_argument(
@@ -256,6 +259,12 @@ Examples:
         help="VAD speech probability threshold 0.1-0.9 (default: 0.5)",
     )
     parser.add_argument(
+        "--lookback",
+        type=int,
+        default=None,
+        help="Audio lookback buffer in ms to capture speech onset (default: 200)",
+    )
+    parser.add_argument(
         "--file",
         "-f",
         default=None,
@@ -276,6 +285,7 @@ Examples:
                     min_utterance_ms=args.min_utterance,
                     endpointing_silence_ms=args.endpointing,
                     vad_threshold=args.vad_threshold,
+                    lookback_ms=args.lookback,
                 )
             )
     except KeyboardInterrupt:

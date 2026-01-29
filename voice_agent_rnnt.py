@@ -148,6 +148,9 @@ class DefaultConfig:
     # Performance
     transcribe_throttle_ms: int = 150
 
+    # Lookback buffer to capture speech onset
+    lookback_ms: int = 200
+
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -231,6 +234,7 @@ class SessionConfig:
     endpointing_silence_ms: int = 400
     vad_threshold: float = 0.5
     transcribe_throttle_ms: int = 150
+    lookback_ms: int = 200
 
     def get_allowed_languages(self) -> Optional[List[str]]:
         """Return allowed languages, falling back to defaults"""
@@ -311,12 +315,17 @@ class VoiceSession:
 
     def reset(self):
         self.audio_buffer: List[float] = []
+        self.lookback_buffer: List[float] = []
         self.is_speaking = False
         self.silence_ms = 0
         self.last_transcript = ""
         self.last_language = None
         self.last_transcribe_time = 0
         self.utterance_id = 0
+
+    def _max_lookback_samples(self) -> int:
+        """Maximum number of samples to keep in lookback buffer"""
+        return int(defaults.sample_rate * self.config.lookback_ms / 1000)
 
     def buffer_duration_ms(self) -> float:
         return len(self.audio_buffer) / defaults.sample_rate * 1000
@@ -338,9 +347,15 @@ class VoiceSession:
 
         if has_speech:
             if not self.is_speaking:
+                # Speech just started - prepend lookback buffer to capture onset
                 self.is_speaking = True
                 self.utterance_id += 1
                 result["utterance_id"] = self.utterance_id
+
+                # Include lookback audio to capture beginning of speech
+                if self.lookback_buffer:
+                    self.audio_buffer.extend(self.lookback_buffer)
+                    self.lookback_buffer = []
 
             self.silence_ms = 0
             self.audio_buffer.extend(audio_chunk.tolist())
@@ -412,6 +427,15 @@ class VoiceSession:
                     }
                 )
 
+        else:
+            # Not speaking and no speech detected - update lookback buffer
+            # Keep a rolling buffer of recent audio to capture speech onset
+            self.lookback_buffer.extend(audio_chunk.tolist())
+            max_samples = self._max_lookback_samples()
+            if len(self.lookback_buffer) > max_samples:
+                # Trim to keep only the most recent samples
+                self.lookback_buffer = self.lookback_buffer[-max_samples:]
+
         return result
 
     def force_finalize(self) -> Optional[dict]:
@@ -478,6 +502,12 @@ async def websocket_transcribe(
         le=1000,
         description="Min time between partial transcriptions",
     ),
+    lookback_ms: int = Query(
+        default=200,
+        ge=0,
+        le=500,
+        description="Audio lookback buffer to capture speech onset",
+    ),
 ):
     global session_counter
 
@@ -499,6 +529,7 @@ async def websocket_transcribe(
         endpointing_silence_ms=endpointing_silence_ms,
         vad_threshold=vad_threshold,
         transcribe_throttle_ms=transcribe_throttle_ms,
+        lookback_ms=lookback_ms,
     )
 
     session = VoiceSession(session_config)
@@ -521,6 +552,7 @@ async def websocket_transcribe(
                 "endpointing_silence_ms": session_config.endpointing_silence_ms,
                 "vad_threshold": session_config.vad_threshold,
                 "transcribe_throttle_ms": session_config.transcribe_throttle_ms,
+                "lookback_ms": session_config.lookback_ms,
                 "streaming_support": has_streaming,
             },
         }
