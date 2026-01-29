@@ -219,6 +219,19 @@ def load_models():
     vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", trust_repo=True)
     vad_model.to(defaults.device)
 
+    # Warmup pass to trigger CUDA kernel compilation and memory allocation
+    print("Running warmup inference...")
+    warmup_audio = np.zeros(defaults.sample_rate, dtype=np.float32)  # 1 second of silence
+
+    # Warmup ASR model
+    with torch.no_grad():
+        _ = asr_model.transcribe([warmup_audio], batch_size=1)
+
+    # Warmup VAD model
+    warmup_chunk = torch.zeros(VAD_CHUNK_SAMPLES, dtype=torch.float32, device=defaults.device)
+    with torch.no_grad():
+        _ = vad_model(warmup_chunk, defaults.sample_rate)
+
     print("Models ready!\n")
 
 
