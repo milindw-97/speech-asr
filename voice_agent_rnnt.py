@@ -219,18 +219,29 @@ def load_models():
     vad_model, _ = torch.hub.load("snakers4/silero-vad", "silero_vad", trust_repo=True)
     vad_model.to(defaults.device)
 
-    # Warmup pass to trigger CUDA kernel compilation and memory allocation
+    # Warmup passes to trigger CUDA kernel compilation and memory allocation
+    # Run multiple passes with different audio lengths to warm up all code paths
     print("Running warmup inference...")
-    warmup_audio = np.zeros(defaults.sample_rate, dtype=np.float32)  # 1 second of silence
 
-    # Warmup ASR model
-    with torch.no_grad():
-        _ = asr_model.transcribe([warmup_audio], batch_size=1)
+    warmup_lengths = [
+        int(defaults.sample_rate * 0.5),   # 500ms
+        int(defaults.sample_rate * 1.0),   # 1 second
+        int(defaults.sample_rate * 2.0),   # 2 seconds
+    ]
 
-    # Warmup VAD model
-    warmup_chunk = torch.zeros(VAD_CHUNK_SAMPLES, dtype=torch.float32, device=defaults.device)
-    with torch.no_grad():
-        _ = vad_model(warmup_chunk, defaults.sample_rate)
+    for i, length in enumerate(warmup_lengths):
+        warmup_audio = np.zeros(length, dtype=np.float32)
+
+        # Warmup ASR model with same parameters as real transcription
+        with torch.no_grad():
+            _ = asr_model.transcribe([warmup_audio], batch_size=1, return_hypotheses=True)
+
+        # Warmup VAD model
+        warmup_chunk = torch.zeros(VAD_CHUNK_SAMPLES, dtype=torch.float32, device=defaults.device)
+        with torch.no_grad():
+            _ = vad_model(warmup_chunk, defaults.sample_rate)
+
+        print(f"  Warmup {i+1}/{len(warmup_lengths)} complete ({length / defaults.sample_rate:.1f}s audio)")
 
     print("Models ready!\n")
 
@@ -257,11 +268,24 @@ class SessionConfig:
 
 
 # ============== RNNT Transcription ==============
+_transcribe_call_count = 0
+
+
 def transcribe_audio(audio: np.ndarray, session_config: SessionConfig) -> dict:
+    global _transcribe_call_count
+    _transcribe_call_count += 1
+    call_num = _transcribe_call_count
+
     start_time = time.time()
+    audio_duration_ms = len(audio) / defaults.sample_rate * 1000
+
+    print(f"[TIMING] Transcribe #{call_num} started (audio: {audio_duration_ms:.0f}ms)")
 
     with torch.no_grad():
+        t0 = time.time()
         result = asr_model.transcribe([audio], batch_size=1, return_hypotheses=True)
+        model_time = (time.time() - t0) * 1000
+        print(f"[TIMING] Transcribe #{call_num} model.transcribe took {model_time:.0f}ms")
 
     elapsed_ms = (time.time() - start_time) * 1000
 
@@ -299,9 +323,17 @@ def transcribe_audio(audio: np.ndarray, session_config: SessionConfig) -> dict:
 
 # ============== VAD ==============
 VAD_CHUNK_SAMPLES = 512
+_vad_call_count = 0
+_vad_slow_threshold_ms = 100  # Log if VAD takes longer than this
 
 
 def get_speech_probability(audio: np.ndarray) -> float:
+    global _vad_call_count
+    _vad_call_count += 1
+    call_num = _vad_call_count
+
+    start_time = time.time()
+
     with torch.no_grad():
         max_prob = 0.0
 
@@ -317,7 +349,13 @@ def get_speech_probability(audio: np.ndarray) -> float:
             prob = vad_model(audio_tensor, defaults.sample_rate).item()
             max_prob = max(max_prob, prob)
 
-        return max_prob
+    elapsed_ms = (time.time() - start_time) * 1000
+
+    # Only log if it's slow (to avoid spamming logs)
+    if elapsed_ms > _vad_slow_threshold_ms:
+        print(f"[TIMING] VAD #{call_num} took {elapsed_ms:.0f}ms (slow!)")
+
+    return max_prob
 
 
 # ============== Voice Session ==============
@@ -344,10 +382,13 @@ class VoiceSession:
         return len(self.audio_buffer) / defaults.sample_rate * 1000
 
     def process_chunk(self, audio_chunk: np.ndarray) -> dict:
+        chunk_start = time.time()
         chunk_ms = len(audio_chunk) / defaults.sample_rate * 1000
         current_time = time.time() * 1000
 
+        vad_start = time.time()
         speech_prob = get_speech_probability(audio_chunk)
+        vad_time = (time.time() - vad_start) * 1000
         has_speech = speech_prob > self.config.vad_threshold
 
         result = {
@@ -448,6 +489,11 @@ class VoiceSession:
             if len(self.lookback_buffer) > max_samples:
                 # Trim to keep only the most recent samples
                 self.lookback_buffer = self.lookback_buffer[-max_samples:]
+
+        # Log slow chunks (> 500ms processing time)
+        chunk_elapsed = (time.time() - chunk_start) * 1000
+        if chunk_elapsed > 500:
+            print(f"[TIMING] process_chunk took {chunk_elapsed:.0f}ms (type={result['type']}, vad={vad_time:.0f}ms)")
 
         return result
 
@@ -572,10 +618,27 @@ async def websocket_transcribe(
     )
 
     try:
+        chunk_count = 0
+        session_start = time.time()
+
         while True:
+            recv_start = time.time()
             data = await websocket.receive_bytes()
+            recv_time = (time.time() - recv_start) * 1000
+
+            chunk_count += 1
+            process_start = time.time()
+
             audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
             result = session.process_chunk(audio)
+
+            process_time = (time.time() - process_start) * 1000
+            total_time = (time.time() - session_start) * 1000
+
+            # Log first 5 chunks and any slow chunks
+            if chunk_count <= 5 or process_time > 500:
+                print(f"[{session_id}] Chunk #{chunk_count}: recv={recv_time:.0f}ms, process={process_time:.0f}ms, total_elapsed={total_time:.0f}ms, type={result['type']}")
+
             await websocket.send_json(result)
 
     except WebSocketDisconnect:
